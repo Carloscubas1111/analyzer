@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚽ Football Analyzer IA</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0e1a; color: #fff; }
+        header { background: linear-gradient(135deg, #1a1f35, #0d6b3a); padding: 20px; text-align: center; }
+        header h1 { font-size: 2rem; color: #00ff88; }
+        header p { color: #aaa; margin-top: 5px; }
+        .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+        .card { background: #1a1f35; border-radius: 12px; padding: 25px; margin-bottom: 20px; border: 1px solid #2a3050; }
+        .card h2 { color: #00ff88; margin-bottom: 20px; font-size: 1.2rem; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; align-items: end; }
+        select, button { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3050; font-size: 1rem; }
+        select { background: #0d1124; color: #fff; }
+        .btn-analizar { background: linear-gradient(135deg, #00ff88, #0d6b3a); color: #000; font-weight: bold; cursor: pointer; border: none; transition: 0.3s; }
+        .btn-analizar:hover { opacity: 0.9; transform: translateY(-2px); }
+        .btn-analizar:disabled { opacity: 0.5; cursor: not-allowed; }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .stat-card { background: #0d1124; border-radius: 10px; padding: 20px; }
+        .stat-card h3 { color: #00ff88; margin-bottom: 15px; text-align: center; }
+        .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #2a3050; }
+        .stat-label { color: #aaa; }
+        .stat-value { color: #fff; font-weight: bold; }
+        .analisis-box { background: #0d1124; border-radius: 10px; padding: 25px; line-height: 1.8; white-space: pre-wrap; }
+        .analisis-box h2 { color: #00ff88; }
+        .fixtures { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+        .fixture-item { background: #0d1124; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #2a3050; }
+        .fixture-teams { font-weight: bold; margin-bottom: 5px; }
+        .fixture-date { color: #aaa; font-size: 0.85rem; }
+        .loading { text-align: center; padding: 40px; color: #00ff88; font-size: 1.2rem; }
+        .hidden { display: none; }
+        .record { display: flex; gap: 10px; justify-content: center; margin: 10px 0; }
+        .record span { padding: 5px 12px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; }
+        .wins { background: #0d6b3a; }
+        .draws { background: #4a4a00; }
+        .losses { background: #6b0d0d; }
+        label { color: #aaa; font-size: 0.9rem; margin-bottom: 5px; display: block; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>⚽ Football Analyzer IA</h1>
+        <p>Predicciones inteligentes basadas en datos reales</p>
+    </header>
+
+    <div class="container">
+        <!-- Formulario -->
+        <div class="card">
+            <h2>🔍 Seleccionar Partido</h2>
+            <div class="form-grid">
+                <div>
+                    <label>Liga</label>
+                    <select id="liga" onchange="cargarEquipos()">
+                        {% for codigo, nombre in ligas.items() %}
+                        <option value="{{ codigo }}">{{ nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label>Equipo Local</label>
+                    <select id="equipo1"><option>Cargando...</option></select>
+                </div>
+                <div>
+                    <label>Equipo Visitante</label>
+                    <select id="equipo2"><option>Cargando...</option></select>
+                </div>
+            </div>
+            <br>
+            <button class="btn-analizar" onclick="analizar()">⚡ Generar Análisis con IA</button>
+        </div>
+
+        <!-- Próximos partidos -->
+        <div class="card">
+            <h2>📅 Próximos Partidos</h2>
+            <div id="fixtures" class="fixtures"><p style="color:#aaa">Selecciona una liga para ver los próximos partidos</p></div>
+        </div>
+
+        <!-- Loading -->
+        <div id="loading" class="card hidden">
+            <div class="loading">⏳ Analizando con IA... Por favor espera</div>
+        </div>
+
+        <!-- Resultados -->
+        <div id="resultados" class="hidden">
+            <div class="card">
+                <h2>📊 Estadísticas del Partido</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3 id="nombre1"></h3>
+                        <div class="record">
+                            <span class="wins" id="wins1"></span>
+                            <span class="draws" id="draws1"></span>
+                            <span class="losses" id="losses1"></span>
+                        </div>
+                        <div class="stat-row"><span class="stat-label">Avg Goles a favor</span><span class="stat-value" id="gf1"></span></div>
+                        <div class="stat-row"><span class="stat-label">Avg Goles en contra</span><span class="stat-value" id="gc1"></span></div>
+                        <div class="stat-row"><span class="stat-label">BTTS</span><span class="stat-value" id="btts1"></span></div>
+                        <div class="stat-row"><span class="stat-label">Over 2.5</span><span class="stat-value" id="over1"></span></div>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="nombre2"></h3>
+                        <div class="record">
+                            <span class="wins" id="wins2"></span>
+                            <span class="draws" id="draws2"></span>
+                            <span class="losses" id="losses2"></span>
+                        </div>
+                        <div class="stat-row"><span class="stat-label">Avg Goles a favor</span><span class="stat-value" id="gf2"></span></div>
+                        <div class="stat-row"><span class="stat-label">Avg Goles en contra</span><span class="stat-value" id="gc2"></span></div>
+                        <div class="stat-row"><span class="stat-label">BTTS</span><span class="stat-value" id="btts2"></span></div>
+                        <div class="stat-row"><span class="stat-label">Over 2.5</span><span class="stat-value" id="over1b"></span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>🤖 Análisis IA</h2>
+                <div class="analisis-box" id="analisis"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.onload = cargarEquipos;
+
+        async function cargarEquipos() {
+            const liga = document.getElementById('liga').value;
+            const r = await fetch(`/equipos/${liga}`);
+            const equipos = await r.json();
+            const sel1 = document.getElementById('equipo1');
+            const sel2 = document.getElementById('equipo2');
+            sel1.innerHTML = equipos.map(e => `<option>${e}</option>`).join('');
+            sel2.innerHTML = equipos.map(e => `<option>${e}</option>`).join('');
+            if (equipos.length > 1) sel2.selectedIndex = 1;
+            cargarFixtures(liga);
+        }
+
+        async function cargarFixtures(liga) {
+            const r = await fetch(`/proximos/${liga}`);
+            const fixtures = await r.json();
+            const div = document.getElementById('fixtures');
+            if (fixtures.length === 0) {
+                div.innerHTML = '<p style="color:#aaa">No hay próximos partidos disponibles</p>';
+                return;
+            }
+            div.innerHTML = fixtures.map(f => `
+                <div class="fixture-item">
+                    <div class="fixture-teams">${f.home} vs ${f.away}</div>
+                    <div class="fixture-date">📅 ${f.date}</div>
+                </div>
+            `).join('');
+        }
+
+        async function analizar() {
+            const liga = document.getElementById('liga').value;
+            const equipo1 = document.getElementById('equipo1').value;
+            const equipo2 = document.getElementById('equipo2').value;
+
+            if (equipo1 === equipo2) {
+                alert('Selecciona dos equipos diferentes');
+                return;
+            }
+
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('resultados').classList.add('hidden');
+            document.querySelector('.btn-analizar').disabled = true;
+
+            const r = await fetch('/analizar', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({equipo1, equipo2, liga})
+            });
+
+            const data = await r.json();
+            document.getElementById('loading').classList.add('hidden');
+            document.querySelector('.btn-analizar').disabled = false;
+
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+
+            const s1 = data.stats1;
+            const s2 = data.stats2;
+
+            document.getElementById('nombre1').textContent = s1.equipo;
+            document.getElementById('nombre2').textContent = s2.equipo;
+            document.getElementById('wins1').textContent = `${s1.victorias}V`;
+            document.getElementById('draws1').textContent = `${s1.empates}E`;
+            document.getElementById('losses1').textContent = `${s1.derrotas}D`;
+            document.getElementById('wins2').textContent = `${s2.victorias}V`;
+            document.getElementById('draws2').textContent = `${s2.empates}E`;
+            document.getElementById('losses2').textContent = `${s2.derrotas}D`;
+            document.getElementById('gf1').textContent = s1.avg_gf;
+            document.getElementById('gc1').textContent = s1.avg_gc;
+            document.getElementById('btts1').textContent = `${s1.btts}/${s1.partidos} (${Math.round(s1.btts/s1.partidos*100)}%)`;
+            document.getElementById('over1').textContent = `${s1.over25}/${s1.partidos} (${Math.round(s1.over25/s1.partidos*100)}%)`;
+            document.getElementById('gf2').textContent = s2.avg_gf;
+            document.getElementById('gc2').textContent = s2.avg_gc;
+            document.getElementById('btts2').textContent = `${s2.btts}/${s2.partidos} (${Math.round(s2.btts/s2.partidos*100)}%)`;
+            document.getElementById('over1b').textContent = `${s2.over25}/${s2.partidos} (${Math.round(s2.over25/s2.partidos*100)}%)`;
+            document.getElementById('analisis').textContent = data.analisis;
+            document.getElementById('resultados').classList.remove('hidden');
+            document.getElementById('resultados').scrollIntoView({behavior: 'smooth'});
+        }
+    </script>
+</body>
+</html>
