@@ -512,7 +512,7 @@
     </div>
 
     <script>
-        let ligaActiva = '{{ list(ligas.keys())[0] }}';
+        let ligaActiva = '{{ ligas.keys()|list|first }}';
 
         window.onload = () => cargarEquipos(ligaActiva);
 
