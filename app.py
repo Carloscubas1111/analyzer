@@ -1,4 +1,5 @@
 import os
+import math
 import requests
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
@@ -25,6 +26,21 @@ LIGAS = {
     "CL":  "Champions League",
 }
 
+_cache_matches = {}
+
+def get_matches(codigo):
+    """Trae todos los partidos terminados de la liga (con cache simple)"""
+    key = f"{codigo}_{datetime.now().strftime('%Y%m%d%H')}"
+    if key in _cache_matches:
+        return _cache_matches[key]
+    url = f"{FD_BASE}/competitions/{codigo}/matches?status=FINISHED"
+    r = requests.get(url, headers=FD_HEADERS)
+    if r.status_code != 200:
+        return []
+    matches = r.json()["matches"]
+    _cache_matches[key] = matches
+    return matches
+
 def get_equipos(codigo):
     url = f"{FD_BASE}/competitions/{codigo}/teams"
     r = requests.get(url, headers=FD_HEADERS)
@@ -32,16 +48,36 @@ def get_equipos(codigo):
         return [t["name"] for t in r.json()["teams"]]
     return []
 
-def get_stats(team_name, codigo):
-    url = f"{FD_BASE}/competitions/{codigo}/matches?status=FINISHED"
-    r = requests.get(url, headers=FD_HEADERS)
-    matches = r.json()["matches"]
+def get_liga_promedios(matches):
+    """Calcula los promedios de goles de TODA la liga (base para Poisson)"""
+    total_partidos = 0
+    goles_local = 0
+    goles_visita = 0
+    for m in matches:
+        hg = m["score"]["fullTime"]["home"]
+        ag = m["score"]["fullTime"]["away"]
+        if hg is None or ag is None:
+            continue
+        total_partidos += 1
+        goles_local += hg
+        goles_visita += ag
+    if total_partidos == 0:
+        return {"avg_local": 1.5, "avg_visita": 1.2, "partidos": 0}
+    return {
+        "avg_local": round(goles_local / total_partidos, 3),
+        "avg_visita": round(goles_visita / total_partidos, 3),
+        "partidos": total_partidos
+    }
+
+def get_stats(team_name, matches):
     team_matches = []
     for m in matches:
         home = m["homeTeam"]["name"]
         away = m["awayTeam"]["name"]
         hg = m["score"]["fullTime"]["home"]
         ag = m["score"]["fullTime"]["away"]
+        if hg is None or ag is None:
+            continue
         ht_home = m["score"].get("halfTime", {}).get("home", None)
         ht_away = m["score"].get("halfTime", {}).get("away", None)
         if home == team_name:
@@ -106,6 +142,96 @@ def get_stats(team_name, codigo):
         "todos": team_matches
     }
 
+def poisson_pmf(k, lam):
+    """Probabilidad de exactamente k goles dado lambda"""
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+def calcular_poisson(s1, s2, liga_avg):
+    """
+    Modelo de Poisson con fuerzas ofensivas/defensivas ajustadas a la liga.
+    s1 = equipo local, s2 = equipo visitante
+    """
+    liga_local = liga_avg["avg_local"]
+    liga_visita = liga_avg["avg_visita"]
+
+    if liga_local <= 0 or liga_visita <= 0:
+        return None
+
+    # Fuerza ofensiva del local = (goles que mete en casa) / (promedio de goles de local en la liga)
+    ataque_local = s1["avg_gf_local"] / liga_local if liga_local > 0 else 1
+    # Fuerza defensiva del local = (goles que recibe en casa) / (promedio de goles de visitante en la liga)
+    defensa_local = s1["avg_gc_local"] / liga_visita if liga_visita > 0 else 1
+    # Fuerza ofensiva del visitante
+    ataque_visita = s2["avg_gf_visita"] / liga_visita if liga_visita > 0 else 1
+    # Fuerza defensiva del visitante
+    defensa_visita = s2["avg_gc_visita"] / liga_local if liga_local > 0 else 1
+
+    # Goles esperados (lambda)
+    lambda_local = ataque_local * defensa_visita * liga_local
+    lambda_visita = ataque_visita * defensa_local * liga_visita
+
+    # Cap para evitar valores absurdos con pocos datos
+    lambda_local = max(0.2, min(lambda_local, 5.0))
+    lambda_visita = max(0.2, min(lambda_visita, 5.0))
+
+    # Matriz de probabilidades hasta 6-6
+    max_goles = 7
+    matriz = []
+    for i in range(max_goles):
+        fila = []
+        for j in range(max_goles):
+            p = poisson_pmf(i, lambda_local) * poisson_pmf(j, lambda_visita)
+            fila.append(p)
+        matriz.append(fila)
+
+    # Probabilidades de resultado
+    p_local = sum(matriz[i][j] for i in range(max_goles) for j in range(max_goles) if i > j)
+    p_empate = sum(matriz[i][i] for i in range(max_goles))
+    p_visita = sum(matriz[i][j] for i in range(max_goles) for j in range(max_goles) if i < j)
+
+    # Over / Under
+    p_over05 = 1 - matriz[0][0]
+    p_over15 = sum(matriz[i][j] for i in range(max_goles) for j in range(max_goles) if i + j > 1.5)
+    p_over25 = sum(matriz[i][j] for i in range(max_goles) for j in range(max_goles) if i + j > 2.5)
+    p_over35 = sum(matriz[i][j] for i in range(max_goles) for j in range(max_goles) if i + j > 3.5)
+
+    # BTTS
+    p_btts = sum(matriz[i][j] for i in range(1, max_goles) for j in range(1, max_goles))
+
+    # Top 5 marcadores
+    marcadores = []
+    for i in range(max_goles):
+        for j in range(max_goles):
+            marcadores.append((f"{i}-{j}", round(matriz[i][j]*100, 2)))
+    marcadores.sort(key=lambda x: x[1], reverse=True)
+    top_marcadores = marcadores[:5]
+
+    return {
+        "lambda_local": round(lambda_local, 2),
+        "lambda_visita": round(lambda_visita, 2),
+        "goles_esperados_total": round(lambda_local + lambda_visita, 2),
+        "p_gana_local": round(p_local*100, 1),
+        "p_empate": round(p_empate*100, 1),
+        "p_gana_visita": round(p_visita*100, 1),
+        "p_1x": round((p_local + p_empate)*100, 1),
+        "p_x2": round((p_empate + p_visita)*100, 1),
+        "p_12": round((p_local + p_visita)*100, 1),
+        "p_over05": round(p_over05*100, 1),
+        "p_over15": round(p_over15*100, 1),
+        "p_over25": round(p_over25*100, 1),
+        "p_over35": round(p_over35*100, 1),
+        "p_under15": round((1-p_over15)*100, 1),
+        "p_under25": round((1-p_over25)*100, 1),
+        "p_under35": round((1-p_over35)*100, 1),
+        "p_btts_si": round(p_btts*100, 1),
+        "p_btts_no": round((1-p_btts)*100, 1),
+        "top_marcadores": top_marcadores,
+        "liga_avg_local": liga_local,
+        "liga_avg_visita": liga_visita
+    }
+
 def get_proximos(codigo):
     url = f"{FD_BASE}/competitions/{codigo}/matches?status=SCHEDULED"
     r = requests.get(url, headers=FD_HEADERS)
@@ -133,77 +259,110 @@ def analizar():
     equipo2 = data["equipo2"]
     codigo = data["liga"]
 
-    s1 = get_stats(equipo1, codigo)
-    s2 = get_stats(equipo2, codigo)
+    matches = get_matches(codigo)
+    if not matches:
+        return jsonify({"error": "No se pudieron cargar los partidos de la liga"})
+
+    liga_avg = get_liga_promedios(matches)
+    s1 = get_stats(equipo1, matches)
+    s2 = get_stats(equipo2, matches)
 
     if not s1 or not s2:
-        return jsonify({"error": "No se encontraron datos"})
+        return jsonify({"error": "No se encontraron datos de uno o ambos equipos"})
+
+    poisson = calcular_poisson(s1, s2, liga_avg)
+    if not poisson:
+        return jsonify({"error": "No se pudo calcular el modelo estadístico"})
 
     h2h = [m for m in s1["todos"] if m["rival"] == equipo2][-5:]
 
     prompt = f"""
-Eres un sharp bettor (apostador profesional) implacable y analítico. Tu trabajo es dar picks REALES
-basados EXCLUSIVAMENTE en los porcentajes matemáticos provistos abajo. Nunca inventes datos que no estén aquí.
+Eres un sharp bettor profesional. Tu trabajo es INTERPRETAR probabilidades ya calculadas matemáticamente
+y convertirlas en picks accionables. NO calcules nada tú mismo, NO inventes datos.
+Las probabilidades del modelo de Poisson que te doy abajo son la VERDAD matemática de este partido.
 
-REGLAS ESTRICTAS DE FILTRADO (síguelas al pie de la letra):
-1. Solo recomienda "Over 2.5" si el promedio combinado de goles (avg_gf + avg_gc de ambos equipos) es >= 2.7,
-   O si el porcentaje individual de over25 de AMBOS equipos supera 55%.
-2. Solo recomienda "BTTS Sí" si el BTTS% de ambos equipos supera 55%. Si alguno está por debajo de 40%, recomienda "BTTS No".
-3. Para el pick de ganador, usa el rendimiento ESPECÍFICO de local del equipo 1 y ESPECÍFICO de visitante del equipo 2 —
-   NO el rendimiento global. Un equipo puede ser fuerte en general pero débil de visitante, eso cambia todo.
-4. Si los números son mediocres (ni over ni under claro, ni ganador claro), recomienda mercados más seguros
-   como Doble Oportunidad o Under, nunca fuerces un pick arriesgado solo por dar opciones.
-5. Para el pick de primer tiempo, solo recomiéndalo si ht_over05_pct o ht_gana_pct supera 60%.
-6. Cada pick DEBE citar el número exacto que lo respalda. Si no hay un número que lo respalde con fuerza, no lo incluyas.
+=== MODELO DE POISSON (probabilidades calculadas matemáticamente) ===
+Este modelo usa la fuerza ofensiva y defensiva de cada equipo ajustada al promedio de la liga.
+Promedio de goles de la liga: {poisson['liga_avg_local']} (local) / {poisson['liga_avg_visita']} (visitante) en {liga_avg['partidos']} partidos
 
-=== DATOS: {s1['equipo']} — JUEGA DE LOCAL ===
-Rendimiento GLOBAL: {s1['victorias']}V {s1['empates']}E {s1['derrotas']}D en {s1['partidos']} partidos | Goles: {s1['avg_gf']} a favor, {s1['avg_gc']} en contra
-Rendimiento COMO LOCAL (el que importa para este partido): {s1['gana_local']}V {s1['empata_local']}E {s1['pierde_local']}D en {s1['partidos_local']} partidos en casa
-- Goles como local: {s1['avg_gf_local']} a favor, {s1['avg_gc_local']} en contra
-- BTTS como local: {s1['btts_local_pct']}%
-- Over 2.5 como local: {s1['over25_local_pct']}%
-- Over 1.5 total: {round(s1['over15']/s1['partidos']*100,1)}% | Over 3.5 total: {round(s1['over35']/s1['partidos']*100,1)}% | Under 2.5 total: {round(s1['under25']/s1['partidos']*100,1)}%
-- Primer tiempo — con goles: {s1['ht_over05_pct']}% | ganando al descanso: {s1['ht_gana_pct']}% | avg goles 1T: {s1['ht_avg_gf']}
-- Últimos 5 (todos): {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s1['ultimos5']]}
+GOLES ESPERADOS:
+- {s1['equipo']} (local): {poisson['lambda_local']} goles esperados
+- {s2['equipo']} (visitante): {poisson['lambda_visita']} goles esperados
+- Total esperado en el partido: {poisson['goles_esperados_total']} goles
 
-=== DATOS: {s2['equipo']} — JUEGA DE VISITANTE ===
-Rendimiento GLOBAL: {s2['victorias']}V {s2['empates']}E {s2['derrotas']}D en {s2['partidos']} partidos | Goles: {s2['avg_gf']} a favor, {s2['avg_gc']} en contra
-Rendimiento COMO VISITANTE (el que importa para este partido): {s2['gana_visita']}V {s2['empata_visita']}E {s2['pierde_visita']}D en {s2['partidos_visita']} partidos fuera
-- Goles como visitante: {s2['avg_gf_visita']} a favor, {s2['avg_gc_visita']} en contra
-- BTTS como visitante: {s2['btts_visita_pct']}%
-- Over 2.5 como visitante: {s2['over25_visita_pct']}%
-- Over 1.5 total: {round(s2['over15']/s2['partidos']*100,1)}% | Over 3.5 total: {round(s2['over35']/s2['partidos']*100,1)}% | Under 2.5 total: {round(s2['under25']/s2['partidos']*100,1)}%
-- Primer tiempo — con goles: {s2['ht_over05_pct']}% | ganando al descanso: {s2['ht_gana_pct']}% | avg goles 1T: {s2['ht_avg_gf']}
-- Últimos 5 (todos): {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s2['ultimos5']]}
+PROBABILIDADES DE RESULTADO:
+- Gana {s1['equipo']}: {poisson['p_gana_local']}%
+- Empate: {poisson['p_empate']}%
+- Gana {s2['equipo']}: {poisson['p_gana_visita']}%
+- Doble oportunidad 1X ({s1['equipo']} no pierde): {poisson['p_1x']}%
+- Doble oportunidad X2 ({s2['equipo']} no pierde): {poisson['p_x2']}%
+- Doble oportunidad 12 (no hay empate): {poisson['p_12']}%
+
+PROBABILIDADES DE GOLES:
+- Over 0.5: {poisson['p_over05']}% | Under 0.5: {round(100-poisson['p_over05'],1)}%
+- Over 1.5: {poisson['p_over15']}% | Under 1.5: {poisson['p_under15']}%
+- Over 2.5: {poisson['p_over25']}% | Under 2.5: {poisson['p_under25']}%
+- Over 3.5: {poisson['p_over35']}% | Under 3.5: {poisson['p_under35']}%
+
+AMBOS EQUIPOS ANOTAN:
+- BTTS Sí: {poisson['p_btts_si']}%
+- BTTS No: {poisson['p_btts_no']}%
+
+MARCADORES MÁS PROBABLES:
+{chr(10).join([f"- {m[0]}: {m[1]}%" for m in poisson['top_marcadores']])}
+
+=== CONTEXTO DE FORMA: {s1['equipo']} (LOCAL) ===
+Como local: {s1['gana_local']}V {s1['empata_local']}E {s1['pierde_local']}D en {s1['partidos_local']} partidos
+Goles en casa: {s1['avg_gf_local']} a favor / {s1['avg_gc_local']} en contra
+Primer tiempo: con goles {s1['ht_over05_pct']}% | ganando al descanso {s1['ht_gana_pct']}%
+Últimos 5: {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s1['ultimos5']]}
+
+=== CONTEXTO DE FORMA: {s2['equipo']} (VISITANTE) ===
+Como visitante: {s2['gana_visita']}V {s2['empata_visita']}E {s2['pierde_visita']}D en {s2['partidos_visita']} partidos
+Goles fuera: {s2['avg_gf_visita']} a favor / {s2['avg_gc_visita']} en contra
+Primer tiempo: con goles {s2['ht_over05_pct']}% | ganando al descanso {s2['ht_gana_pct']}%
+Últimos 5: {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s2['ultimos5']]}
 
 === HEAD TO HEAD ===
-{[(m['rival'], f"{m['gf']}-{m['gc']}") for m in h2h] if h2h else "Sin enfrentamientos directos en los datos disponibles"}
+{[(m['rival'], f"{m['gf']}-{m['gc']}") for m in h2h] if h2h else "Sin enfrentamientos directos en esta temporada"}
+
+REGLAS ESTRICTAS PARA LOS PICKS:
+1. Confianza ALTA solo si la probabilidad de Poisson es >= 65%.
+2. Confianza MEDIA si está entre 55% y 64%.
+3. Confianza BAJA si está entre 50% y 54%. NUNCA recomiendes un pick por debajo de 50%.
+4. CADA pick debe citar el porcentaje exacto de Poisson que lo respalda.
+5. Si la forma reciente contradice fuertemente a Poisson, menciónalo en Factores de Riesgo.
+6. Solo menciona primer tiempo si ht_over05_pct o ht_gana_pct de algún equipo supera 60%.
+7. Ordena los picks de mayor a menor probabilidad.
 
 Responde en español con este formato EXACTO:
 
-## 📊 Análisis de Forma
-[Compara el rendimiento de local de {s1['equipo']} vs el rendimiento de visitante de {s2['equipo']} específicamente. Máximo 5 líneas.]
+## 📊 Lectura del Modelo
+[Interpreta qué dicen los goles esperados y las probabilidades principales. Máximo 4 líneas.]
 
 ## ⚽ Análisis de Goles
-[Qué dicen los números de Over/Under. Cita los porcentajes exactos. Menciona primer tiempo solo si aplica la regla 5.]
+[Compara Over/Under según Poisson. Di cuál es el escenario más probable y por qué. Cita porcentajes.]
 
-## 🔄 Head to Head
-[Usa los datos H2H si existen. Si no hay, dilo explícitamente.]
+## 🔄 Forma y Contexto
+[Contrasta la forma reciente con lo que dice el modelo. ¿Se confirman o se contradicen?]
 
 ## 🎯 Picks Recomendados
-[Entre 3 y 5 picks. CADA pick debe aplicar las reglas estrictas de arriba y citar el número exacto.]
+[Entre 3 y 5 picks, solo los que superen 50% según Poisson. Ordenados de mayor a menor probabilidad.]
 
-Pick 1 — [Mercado]: [Pick exacto] | Confianza: Alto | Razón: [cita el % exacto]
-Pick 2 — [Mercado]: [Pick exacto] | Confianza: Alto/Medio | Razón: [cita el % exacto]
-Pick 3 — [Mercado]: [Pick exacto] | Confianza: Medio | Razón: [cita el % exacto]
-Pick 4 — [Mercado]: [Pick exacto] | Confianza: Medio/Bajo | Razón: [cita el % exacto] (solo si cumple las reglas)
-Pick 5 — [Mercado]: [Pick exacto] | Confianza: Bajo | Razón: [cita el % exacto] (solo si cumple las reglas)
+Pick 1 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
+Pick 2 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
+Pick 3 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
+Pick 4 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Medio/Bajo] | Razón: [1 línea] (si aplica)
+Pick 5 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Bajo] | Razón: [1 línea] (si aplica)
+
+## 🎲 Marcador Más Probable
+[Menciona el top 3 de marcadores con sus porcentajes]
 
 ## ⚠️ Factores de Riesgo
-[Qué podría invalidar estos picks. Máximo 2 líneas.]
+[Qué podría invalidar el modelo. Máximo 2 líneas.]
 
 ## 📝 Conclusión
-[2 líneas con el pick más fuerte y por qué.]
+[2 líneas con el pick más sólido y su respaldo matemático.]
 """
 
     response = client.chat.completions.create(
@@ -225,6 +384,7 @@ Pick 5 — [Mercado]: [Pick exacto] | Confianza: Bajo | Razón: [cita el % exact
         "analisis": analisis,
         "stats1": s1,
         "stats2": s2,
+        "poisson": poisson,
         "archivo": nombre
     })
 
