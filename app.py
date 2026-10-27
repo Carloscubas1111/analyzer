@@ -60,12 +60,14 @@ def get_stats(team_name, codigo):
         return None
     total = len(team_matches)
 
-    # Calcular stats de primer tiempo
     ht_matches = [m for m in team_matches if m["ht_gf"] is not None]
     ht_total = len(ht_matches)
     ht_over05 = sum(1 for m in ht_matches if (m["ht_gf"] or 0) + (m["ht_gc"] or 0) > 0.5)
     ht_gana = sum(1 for m in ht_matches if (m["ht_gf"] or 0) > (m["ht_gc"] or 0))
     ht_goles_favor = sum((m["ht_gf"] or 0) for m in ht_matches)
+
+    locales = [m for m in team_matches if m["local"]]
+    visitas = [m for m in team_matches if not m["local"]]
 
     return {
         "equipo": team_name,
@@ -80,12 +82,23 @@ def get_stats(team_name, codigo):
         "over15": sum(1 for m in team_matches if m["gf"] + m["gc"] > 1.5),
         "over25": sum(1 for m in team_matches if m["gf"] + m["gc"] > 2.5),
         "over35": sum(1 for m in team_matches if m["gf"] + m["gc"] > 3.5),
-        "under15": sum(1 for m in team_matches if m["gf"] + m["gc"] < 1.5),
         "under25": sum(1 for m in team_matches if m["gf"] + m["gc"] < 2.5),
-        "gana_local": sum(1 for m in team_matches if m["local"] and m["gf"] > m["gc"]),
-        "gana_visita": sum(1 for m in team_matches if not m["local"] and m["gf"] > m["gc"]),
-        "partidos_local": sum(1 for m in team_matches if m["local"]),
-        "partidos_visita": sum(1 for m in team_matches if not m["local"]),
+        "partidos_local": len(locales),
+        "partidos_visita": len(visitas),
+        "gana_local": sum(1 for m in locales if m["gf"] > m["gc"]),
+        "empata_local": sum(1 for m in locales if m["gf"] == m["gc"]),
+        "pierde_local": sum(1 for m in locales if m["gf"] < m["gc"]),
+        "gana_visita": sum(1 for m in visitas if m["gf"] > m["gc"]),
+        "empata_visita": sum(1 for m in visitas if m["gf"] == m["gc"]),
+        "pierde_visita": sum(1 for m in visitas if m["gf"] < m["gc"]),
+        "avg_gf_local": round(sum(m["gf"] for m in locales) / len(locales), 2) if locales else 0,
+        "avg_gc_local": round(sum(m["gc"] for m in locales) / len(locales), 2) if locales else 0,
+        "avg_gf_visita": round(sum(m["gf"] for m in visitas) / len(visitas), 2) if visitas else 0,
+        "avg_gc_visita": round(sum(m["gc"] for m in visitas) / len(visitas), 2) if visitas else 0,
+        "btts_local_pct": round(sum(1 for m in locales if m["gf"]>0 and m["gc"]>0)/len(locales)*100,1) if locales else 0,
+        "btts_visita_pct": round(sum(1 for m in visitas if m["gf"]>0 and m["gc"]>0)/len(visitas)*100,1) if visitas else 0,
+        "over25_local_pct": round(sum(1 for m in locales if m["gf"]+m["gc"]>2.5)/len(locales)*100,1) if locales else 0,
+        "over25_visita_pct": round(sum(1 for m in visitas if m["gf"]+m["gc"]>2.5)/len(visitas)*100,1) if visitas else 0,
         "ht_over05_pct": round(ht_over05/ht_total*100, 1) if ht_total > 0 else 0,
         "ht_gana_pct": round(ht_gana/ht_total*100, 1) if ht_total > 0 else 0,
         "ht_avg_gf": round(ht_goles_favor/ht_total, 2) if ht_total > 0 else 0,
@@ -126,95 +139,78 @@ def analizar():
     if not s1 or not s2:
         return jsonify({"error": "No se encontraron datos"})
 
-    # Calcular head to head
-    h2h = []
-    for m in s1["todos"]:
-        if m["rival"] == equipo2:
-            h2h.append(m)
-    h2h = h2h[-5:]
-
-    # Stats locales y visitante
-    local_win_pct = round(s1["gana_local"]/s1["partidos_local"]*100, 1) if s1["partidos_local"] > 0 else 0
-    visit_win_pct = round(s2["gana_visita"]/s2["partidos_visita"]*100, 1) if s2["partidos_visita"] > 0 else 0
+    h2h = [m for m in s1["todos"] if m["rival"] == equipo2][-5:]
 
     prompt = f"""
-Eres un analista profesional de apuestas deportivas con experiencia real.
-Tu trabajo es dar picks HONESTOS basados ÚNICAMENTE en los datos estadísticos proporcionados.
-NO inventes información. Si los datos apuntan a Under, di Under. Si apuntan a pocos goles, dilo.
-Analiza TODOS los mercados disponibles y elige los que tengan respaldo estadístico real.
+Eres un sharp bettor (apostador profesional) implacable y analítico. Tu trabajo es dar picks REALES
+basados EXCLUSIVAMENTE en los porcentajes matemáticos provistos abajo. Nunca inventes datos que no estén aquí.
 
-=== DATOS: {s1['equipo']} (JUEGA DE LOCAL) ===
-- Record general: {s1['victorias']}V {s1['empates']}E {s1['derrotas']}D en {s1['partidos']} partidos
-- Como LOCAL: {s1['gana_local']}V de {s1['partidos_local']} partidos ({local_win_pct}% victorias en casa)
-- Promedio goles anotados: {s1['avg_gf']} | recibidos: {s1['avg_gc']}
-- Over 1.5: {s1['over15']}/{s1['partidos']} ({round(s1['over15']/s1['partidos']*100,1)}%)
-- Over 2.5: {s1['over25']}/{s1['partidos']} ({round(s1['over25']/s1['partidos']*100,1)}%)
-- Over 3.5: {s1['over35']}/{s1['partidos']} ({round(s1['over35']/s1['partidos']*100,1)}%)
-- Under 2.5: {s1['under25']}/{s1['partidos']} ({round(s1['under25']/s1['partidos']*100,1)}%)
-- BTTS Sí: {s1['btts']}/{s1['partidos']} ({round(s1['btts']/s1['partidos']*100,1)}%)
-- BTTS No: {s1['btts_no']}/{s1['partidos']} ({round(s1['btts_no']/s1['partidos']*100,1)}%)
-- 1er Tiempo con goles: {s1['ht_over05_pct']}%
-- 1er Tiempo ganando: {s1['ht_gana_pct']}%
-- Promedio goles 1er Tiempo: {s1['ht_avg_gf']}
-- Últimos 5: {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s1['ultimos5']]}
+REGLAS ESTRICTAS DE FILTRADO (síguelas al pie de la letra):
+1. Solo recomienda "Over 2.5" si el promedio combinado de goles (avg_gf + avg_gc de ambos equipos) es >= 2.7,
+   O si el porcentaje individual de over25 de AMBOS equipos supera 55%.
+2. Solo recomienda "BTTS Sí" si el BTTS% de ambos equipos supera 55%. Si alguno está por debajo de 40%, recomienda "BTTS No".
+3. Para el pick de ganador, usa el rendimiento ESPECÍFICO de local del equipo 1 y ESPECÍFICO de visitante del equipo 2 —
+   NO el rendimiento global. Un equipo puede ser fuerte en general pero débil de visitante, eso cambia todo.
+4. Si los números son mediocres (ni over ni under claro, ni ganador claro), recomienda mercados más seguros
+   como Doble Oportunidad o Under, nunca fuerces un pick arriesgado solo por dar opciones.
+5. Para el pick de primer tiempo, solo recomiéndalo si ht_over05_pct o ht_gana_pct supera 60%.
+6. Cada pick DEBE citar el número exacto que lo respalda. Si no hay un número que lo respalde con fuerza, no lo incluyas.
 
-=== DATOS: {s2['equipo']} (JUEGA DE VISITANTE) ===
-- Record general: {s2['victorias']}V {s2['empates']}E {s2['derrotas']}D en {s2['partidos']} partidos
-- Como VISITANTE: {s2['gana_visita']}V de {s2['partidos_visita']} partidos ({visit_win_pct}% victorias fuera)
-- Promedio goles anotados: {s2['avg_gf']} | recibidos: {s2['avg_gc']}
-- Over 1.5: {s2['over15']}/{s2['partidos']} ({round(s2['over15']/s2['partidos']*100,1)}%)
-- Over 2.5: {s2['over25']}/{s2['partidos']} ({round(s2['over25']/s2['partidos']*100,1)}%)
-- Over 3.5: {s2['over35']}/{s2['partidos']} ({round(s2['over35']/s2['partidos']*100,1)}%)
-- Under 2.5: {s2['under25']}/{s2['partidos']} ({round(s2['under25']/s2['partidos']*100,1)}%)
-- BTTS Sí: {s2['btts']}/{s2['partidos']} ({round(s2['btts']/s2['partidos']*100,1)}%)
-- BTTS No: {s2['btts_no']}/{s2['partidos']} ({round(s2['btts_no']/s2['partidos']*100,1)}%)
-- 1er Tiempo con goles: {s2['ht_over05_pct']}%
-- 1er Tiempo ganando: {s2['ht_gana_pct']}%
-- Promedio goles 1er Tiempo: {s2['ht_avg_gf']}
-- Últimos 5: {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s2['ultimos5']]}
+=== DATOS: {s1['equipo']} — JUEGA DE LOCAL ===
+Rendimiento GLOBAL: {s1['victorias']}V {s1['empates']}E {s1['derrotas']}D en {s1['partidos']} partidos | Goles: {s1['avg_gf']} a favor, {s1['avg_gc']} en contra
+Rendimiento COMO LOCAL (el que importa para este partido): {s1['gana_local']}V {s1['empata_local']}E {s1['pierde_local']}D en {s1['partidos_local']} partidos en casa
+- Goles como local: {s1['avg_gf_local']} a favor, {s1['avg_gc_local']} en contra
+- BTTS como local: {s1['btts_local_pct']}%
+- Over 2.5 como local: {s1['over25_local_pct']}%
+- Over 1.5 total: {round(s1['over15']/s1['partidos']*100,1)}% | Over 3.5 total: {round(s1['over35']/s1['partidos']*100,1)}% | Under 2.5 total: {round(s1['under25']/s1['partidos']*100,1)}%
+- Primer tiempo — con goles: {s1['ht_over05_pct']}% | ganando al descanso: {s1['ht_gana_pct']}% | avg goles 1T: {s1['ht_avg_gf']}
+- Últimos 5 (todos): {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s1['ultimos5']]}
 
-=== HEAD TO HEAD (últimos enfrentamientos disponibles) ===
-{[(m['rival'], f"{m['gf']}-{m['gc']}") for m in h2h] if h2h else "Sin datos H2H disponibles en esta temporada"}
+=== DATOS: {s2['equipo']} — JUEGA DE VISITANTE ===
+Rendimiento GLOBAL: {s2['victorias']}V {s2['empates']}E {s2['derrotas']}D en {s2['partidos']} partidos | Goles: {s2['avg_gf']} a favor, {s2['avg_gc']} en contra
+Rendimiento COMO VISITANTE (el que importa para este partido): {s2['gana_visita']}V {s2['empata_visita']}E {s2['pierde_visita']}D en {s2['partidos_visita']} partidos fuera
+- Goles como visitante: {s2['avg_gf_visita']} a favor, {s2['avg_gc_visita']} en contra
+- BTTS como visitante: {s2['btts_visita_pct']}%
+- Over 2.5 como visitante: {s2['over25_visita_pct']}%
+- Over 1.5 total: {round(s2['over15']/s2['partidos']*100,1)}% | Over 3.5 total: {round(s2['over35']/s2['partidos']*100,1)}% | Under 2.5 total: {round(s2['under25']/s2['partidos']*100,1)}%
+- Primer tiempo — con goles: {s2['ht_over05_pct']}% | ganando al descanso: {s2['ht_gana_pct']}% | avg goles 1T: {s2['ht_avg_gf']}
+- Últimos 5 (todos): {[(m['rival'], f"{m['gf']}-{m['gc']}", 'Casa' if m['local'] else 'Fuera') for m in s2['ultimos5']]}
 
-MERCADOS A EVALUAR (solo incluye los que tengan respaldo estadístico real):
-- Ganador: {s1['equipo']} gana / Empate / {s2['equipo']} gana
-- Doble oportunidad: {s1['equipo']} no pierde (1X) / {s2['equipo']} no pierde (X2)
-- Goles totales: Over/Under 1.5 / Over/Under 2.5 / Over/Under 3.5
-- BTTS: Ambos anotan Sí / No
-- Primer tiempo: Over 0.5 goles 1T / Gana {s1['equipo']} en 1T / Empate en 1T
-- Hándicap: si hay diferencia clara de nivel
+=== HEAD TO HEAD ===
+{[(m['rival'], f"{m['gf']}-{m['gc']}") for m in h2h] if h2h else "Sin enfrentamientos directos en los datos disponibles"}
 
 Responde en español con este formato EXACTO:
 
 ## 📊 Análisis de Forma
-[Analiza el momento actual de cada equipo basado en sus últimos 5. Menciona si juegan bien en casa/fuera. Máximo 5 líneas.]
+[Compara el rendimiento de local de {s1['equipo']} vs el rendimiento de visitante de {s2['equipo']} específicamente. Máximo 5 líneas.]
 
 ## ⚽ Análisis de Goles
-[Qué dicen los números sobre cuántos goles se esperan. Compara Over 1.5, 2.5, 3.5 y Under. Menciona el primer tiempo si los datos lo respaldan.]
+[Qué dicen los números de Over/Under. Cita los porcentajes exactos. Menciona primer tiempo solo si aplica la regla 5.]
 
 ## 🔄 Head to Head
-[Si hay datos H2H úsalos. Si no, menciona que no hay enfrentamientos previos en esta temporada y analiza tendencias generales.]
+[Usa los datos H2H si existen. Si no hay, dilo explícitamente.]
 
 ## 🎯 Picks Recomendados
-[Lista entre 3 y 5 picks. Solo incluye picks que los datos respalden claramente. Ordénalos de mayor a menor confianza.]
+[Entre 3 y 5 picks. CADA pick debe aplicar las reglas estrictas de arriba y citar el número exacto.]
 
-Pick 1 — [Mercado]: [Pick exacto] | Confianza: Alto | Razón: [1 línea con el dato que lo respalda]
-Pick 2 — [Mercado]: [Pick exacto] | Confianza: Alto/Medio | Razón: [1 línea]
-Pick 3 — [Mercado]: [Pick exacto] | Confianza: Medio | Razón: [1 línea]
-Pick 4 — [Mercado]: [Pick exacto] | Confianza: Medio/Bajo | Razón: [1 línea] (solo si los datos lo respaldan)
-Pick 5 — [Mercado]: [Pick exacto] | Confianza: Bajo | Razón: [1 línea] (solo si los datos lo respaldan)
+Pick 1 — [Mercado]: [Pick exacto] | Confianza: Alto | Razón: [cita el % exacto]
+Pick 2 — [Mercado]: [Pick exacto] | Confianza: Alto/Medio | Razón: [cita el % exacto]
+Pick 3 — [Mercado]: [Pick exacto] | Confianza: Medio | Razón: [cita el % exacto]
+Pick 4 — [Mercado]: [Pick exacto] | Confianza: Medio/Bajo | Razón: [cita el % exacto] (solo si cumple las reglas)
+Pick 5 — [Mercado]: [Pick exacto] | Confianza: Bajo | Razón: [cita el % exacto] (solo si cumple las reglas)
 
 ## ⚠️ Factores de Riesgo
-[Qué podría cambiar el resultado. Máximo 2 líneas.]
+[Qué podría invalidar estos picks. Máximo 2 líneas.]
 
 ## 📝 Conclusión
-[2 líneas resumiendo el análisis y el pick más fuerte.]
+[2 líneas con el pick más fuerte y por qué.]
 """
 
     response = client.chat.completions.create(
-        model="qwen/qwen3.8-27b",
+        model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000
+        max_tokens=2500,
+        temperature=0.3
     )
 
     analisis = response.choices[0].message.content
