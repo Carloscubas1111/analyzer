@@ -498,14 +498,28 @@ Primer tiempo: con goles {s2['ht_over05_pct']}% | ganando al descanso {s2['ht_ga
 {[(m['rival'], f"{m['gf']}-{m['gc']}") for m in h2h] if h2h else "Sin enfrentamientos directos en esta temporada"}
 
 REGLAS PARA LOS PICKS:
-1. Confianza Alta solo si Poisson da >= 65%. Media entre 55% y 64%. Baja entre 50% y 54%.
-2. Nunca recomiendes un pick por debajo del 50%.
-3. Cada pick cita el porcentaje exacto de Poisson que lo respalda.
-4. Si un equipo está "En crisis" o "A la baja", dilo explícitamente y considéralo más débil de lo que sugiere su nombre.
-5. Si un equipo enfrentó un calendario muy blando (calendario < 0.85), advierte que sus números están inflados.
-6. Menciona primer tiempo solo si algún equipo supera 60% en ht_over05_pct o ht_gana_pct.
-7. Ordena los picks de mayor a menor probabilidad.
-8. Si los goles esperados de Poisson contradicen fuertemente los promedios de temporada de algún equipo, señálalo en Factores de Riesgo.
+REGLAS PARA LOS PICKS:
+1. NUNCA incluyas picks por encima del 85%. Son casi certezas, las casas los pagan a cuota ridicula
+   y no aportan valor. Over 0.5 goles queda PROHIBIDO salvo que baje de 85%.
+2. NUNCA des dos picks que se contradicen entre si. Prohibido en el mismo analisis:
+   - 1X junto con X2 (uno dice que el local no pierde, el otro que el visitante no pierde)
+   - 1X junto con "gana el visitante", ni X2 junto con "gana el local"
+   - 12 junto con cualquier doble oportunidad que incluya el empate
+   - Over y Under de la misma linea
+   - BTTS Si junto con BTTS No
+   Si dos picks se pisan, deja solo el que tenga mayor probabilidad.
+3. Prefiere picks INDEPENDIENTES entre si. Over 1.5, Over 2.5 y BTTS Si suelen caer juntos:
+   si incluyes mas de uno de ese grupo, advierte que estan correlacionados y no son apuestas separadas.
+4. Confianza Alta solo entre 65% y 85%. Media entre 55% y 64%. Baja entre 50% y 54%.
+5. Nunca recomiendes un pick por debajo del 50%.
+6. Da ENTRE 2 Y 5 PICKS. Si solo hay 2 o 3 que cumplan todas las reglas, da 2 o 3 y ya.
+   Es mejor dar 2 picks solidos que rellenar hasta 5 con basura. No inventes picks para llenar el formato.
+7. Cada pick cita el porcentaje exacto de Poisson que lo respalda.
+8. Si un equipo esta "En crisis" o "A la baja", dilo y considera que es mas debil de lo que sugiere su nombre.
+9. Si un equipo enfrento un calendario muy blando (calendario < 0.85), advierte que sus numeros estan inflados.
+10. Menciona primer tiempo solo si algun equipo supera 60% en ht_over05_pct o ht_gana_pct.
+11. Ordena los picks de mayor a menor probabilidad.
+12. Si los goles esperados de Poisson contradicen los promedios de temporada de algun equipo, dilo en Factores de Riesgo.
 
 Responde en español con este formato EXACTO:
 
@@ -522,12 +536,14 @@ Responde en español con este formato EXACTO:
 [Contrasta la forma reciente con el modelo. ¿Se confirman o se contradicen?]
 
 ## 🎯 Picks Recomendados
+[Entre 2 y 5 picks. Solo los que cumplan TODAS las reglas. No rellenes para llegar a 5.]
+
 Pick 1 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
 Pick 2 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
-Pick 3 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Alto/Medio/Bajo] | Razón: [1 línea]
-Pick 4 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Medio/Bajo] | Razón: [1 línea] (si aplica)
-Pick 5 — [Mercado]: [Pick exacto] | Probabilidad: [X%] | Confianza: [Bajo] | Razón: [1 línea] (si aplica)
+[Agrega Pick 3, 4 y 5 SOLO si hay material real que cumpla las reglas]
 
+Si dos o más picks están correlacionados (caen juntos), añade esta línea al final:
+⚠️ Nota: los picks [X] y [Y] están correlacionados, no cuentan como apuestas independientes.
 ## 🎲 Marcador Más Probable
 [Top 3 de marcadores con sus porcentajes]
 
